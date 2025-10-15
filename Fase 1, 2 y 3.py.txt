@@ -1,0 +1,208 @@
+# SCRIPT COMPLETO: FASES 1, 2 Y 3 (ENTRENAMIENTO MEJORADO, COMPARACIÓN Y PREDICCIÓN)
+
+# --- 1. Importaciones de Librerías ---
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+import joblib
+import os
+import warnings
+from datetime import datetime, timedelta
+
+# Suprimir warnings para una salida más limpia
+warnings.filterwarnings('ignore')
+
+# Importaciones para modelos y preprocesamiento
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_absolute_error
+
+# Importaciones para la Red Neuronal Adaptativa con TensorFlow/Keras
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Dropout
+from tensorflow.keras.optimizers import Adam
+
+# --- FASE 1: Creación de Datos ---
+def crear_dataset_demostrativo(n_muestras=2000):
+    """Crea un DataFrame de pandas simulando datos de viajes."""
+    print("---  FASE 1: Creando un dataset de ejemplo ---")
+    data = {
+        'distancia_km': np.random.uniform(1, 50, n_muestras),
+        'hora_dia': np.random.randint(0, 24, n_muestras),
+        'dia_semana': np.random.randint(0, 7, n_muestras),
+        'condiciones_climaticas': np.random.choice(['soleado', 'lluvia', 'nublado'], n_muestras, p=[0.6, 0.25, 0.15]),
+        'incidentes_ruta': np.random.choice([0, 1], n_muestras, p=[0.85, 0.15])
+    }
+    df = pd.DataFrame(data)
+    df['tiempo_viaje_min'] = (
+        df['distancia_km'] * 2.5 +
+        df['hora_dia'].apply(lambda h: (h-8)**2 if 6<=h<=10 or 17<=h<=20 else 5) +
+        df['condiciones_climaticas'].map({'soleado': 0, 'nublado': 8, 'lluvia': 20}) +
+        df['incidentes_ruta'] * 30 +
+        np.random.normal(0, 10, n_muestras)
+    ).clip(lower=5)
+    print("✅ DataFrame de ejemplo creado.")
+    return df
+
+# --- FASE 2: Análisis Exploratorio con Gráficos ---
+def analizar_datos_con_graficos(df):
+    """Muestra un análisis visual de los datos."""
+    print("\n--- FASE 2: Analizando los datos con gráficos comparativos ---")
+    plt.style.use('seaborn-v0_8-whitegrid')
+    fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+    fig.suptitle('Análisis Exploratorio de los Datos de Entrenamiento', fontsize=20)
+    sns.histplot(df['tiempo_viaje_min'], kde=True, ax=axes[0, 0], color='skyblue').set_title('Distribución de Tiempos de Viaje')
+    sns.lineplot(x='hora_dia', y='tiempo_viaje_min', data=df, ax=axes[0, 1], marker='o', color='coral').set_title('Tiempo Promedio vs. Hora del Día')
+    sns.boxplot(x='condiciones_climaticas', y='tiempo_viaje_min', data=df, ax=axes[1, 0]).set_title('Comparativa de Tiempos por Clima')
+    sns.heatmap(df.select_dtypes(include=np.number).corr(), annot=True, cmap='coolwarm', ax=axes[1, 1], fmt='.2f').set_title('Correlación entre Variables')
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plt.show()
+
+# --- FASE 3: Preparación de Datos ---
+def preparar_datos_para_modelo(df):
+    """Prepara los datos y guarda los archivos necesarios para las Fases 4, 5 y 6."""
+    print("\n--- FASE 3: Preparando datos para el modelo ---")
+    X = df.drop('tiempo_viaje_min', axis=1)
+    y = df['tiempo_viaje_min']
+    numeric_features = X.select_dtypes(include=np.number).columns
+    categorical_features = X.select_dtypes(exclude=np.number).columns
+    preprocessor = ColumnTransformer(transformers=[('num', StandardScaler(), numeric_features),('cat', OneHotEncoder(handle_unknown='ignore'), categorical_features)])
+    X_train_raw, X_test_raw, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+    X_train = preprocessor.fit_transform(X_train_raw)
+    X_test = preprocessor.transform(X_test_raw)
+    output_dir = '/content/'
+    if not os.path.exists(output_dir): os.makedirs(output_dir)
+    np.savez(os.path.join(output_dir, 'datos_entrenamiento.npz'), X_train=X_train, X_test=X_test, y_train=y_train.values, y_test=y_test.values)
+    joblib.dump(preprocessor, os.path.join(output_dir, 'preprocessor.pkl'))
+    print(f"\n✅ ¡Archivos listos para tu amigo! Se guardaron en '{output_dir}'")
+    return X_train, X_test, y_train, y_test, df['tiempo_viaje_min'].mean()
+
+# --- FASE "3.5": Entrenamiento y Comparación de Modelos ---
+def entrenar_y_comparar_modelos_base(X_train, X_test, y_train, y_test):
+    """Entrena un modelo simple y una Red Neuronal Adaptativa para comparar."""
+    print("\n--- Entrenando modelos base para una comparativa ---")
+    resultados = []
+    # Modelo 1: Regresión Lineal
+    lr_model = LinearRegression()
+    lr_model.fit(X_train, y_train)
+    y_pred_lr = lr_model.predict(X_test)
+    resultados.append({'Modelo': 'Regresión Lineal', 'MAE': mean_absolute_error(y_test, y_pred_lr)})
+    # Modelo 2: Red Neuronal Adaptativa (MLP) - **ENTRENADO MÁS TIEMPO**
+    print("  -> Entrenando Modelo 2: Red Neuronal Adaptativa (100 Épocas)...")
+    mlp_model = Sequential([Dense(64, activation='relu', input_shape=(X_train.shape[1],)), Dropout(0.3), Dense(32, activation='relu'), Dense(1, activation='linear')])
+    mlp_model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
+    # Aumentamos las épocas para un mejor entrenamiento
+    mlp_model.fit(X_train, y_train, epochs=100, batch_size=32, verbose=0, validation_split=0.1)
+    y_pred_mlp = mlp_model.predict(X_test, verbose=0).flatten()
+    resultados.append({'Modelo': 'Red Neuronal Adaptativa', 'MAE': mean_absolute_error(y_test, y_pred_mlp)})
+    df_comparativa = pd.DataFrame(resultados).set_index('Modelo')
+    print("\n" + "="*45)
+    print("📊 TABLA COMPARATIVA DE MODELOS BASE 📊")
+    print(df_comparativa.round(2))
+    print("="*45)
+    return mlp_model
+
+# --- FASE "3.75": Predicción con tus Propios Datos (Salida y Gráfico Mejorados) ---
+def predecir_viaje_usuario(modelo_entrenado, tiempo_promedio_general):
+    """Pide datos al usuario, realiza una predicción y muestra un resultado detallado."""
+    print("\n" + "#"*60)
+    print("### 🚀 AHORA ES TU TURNO: HAZ UNA PREDICCIÓN 🚀 ###")
+    print("#"*60)
+    
+    try:
+        # --- Recopilación de datos del usuario ---
+        distancia = float(input("   - Distancia de tu viaje (km): "))
+        hora = int(input("   - Hora de salida (0-23): "))
+        dia_num = int(input("   - Día de la semana (0=Lunes a 6=Domingo): "))
+        clima = input("   - Clima actual (soleado, lluvia, nublado): ").lower()
+        incidentes = int(input("   - ¿Hay incidentes en la ruta? (0=No, 1=Sí): "))
+        
+        if clima not in ['soleado', 'lluvia', 'nublado']:
+            print("❌ Error: El clima debe ser 'soleado', 'lluvia' o 'nublado'.")
+            return
+
+        # --- Procesamiento y Predicción ---
+        preprocessor = joblib.load('/content/preprocessor.pkl')
+        df_usuario = pd.DataFrame([{'distancia_km': distancia, 'hora_dia': hora, 'dia_semana': dia_num, 'condiciones_climaticas': clima, 'incidentes_ruta': incidentes}])
+        datos_procesados = preprocessor.transform(df_usuario)
+        prediccion = modelo_entrenado.predict(datos_procesados, verbose=0).flatten()[0]
+        
+        # --- Generación de Resultados y Recomendaciones ---
+        velocidad_promedio = (distancia / prediccion) * 60 if prediccion > 0 else 0
+        dias_semana = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo']
+        dia_str = dias_semana[dia_num]
+        
+        condiciones_str = clima.capitalize()
+        if incidentes == 1:
+            condiciones_str += " | Tráfico intenso"
+
+        recomendaciones = []
+        if velocidad_promedio < 15:
+            recomendaciones.append("🚗 Tráfico MUY intenso - Considere posponer el viaje")
+        
+        if (7 <= hora <= 9) or (17 <= hora <= 19):
+            recomendaciones.append("⏰ Congestión por hora pico - Salga con anticipación")
+        
+        if clima == 'lluvia':
+            recomendaciones.append("🌧️ Lluvia intensa - Extreme precauciones")
+        
+        if not recomendaciones:
+            recomendaciones.append("✅ Condiciones favorables - ¡Buen viaje!")
+
+        # --- Impresión del Resultado con Formato Mejorado ---
+        print("\n" + "="*35)
+        print("🎯 RESULTADO DE PREDICCIÓN 🎯")
+        print("="*35)
+        
+        print("\n📋 INFORMACIÓN DEL VIAJE:")
+        print(f"  • Distancia: {distancia:.1f} km, Hora: {hora}:00, Día: {dia_str}")
+        print(f"  • Condiciones: {condiciones_str}")
+        
+        print("\n⏱️ PREDICCIÓN:")
+        print(f"  • Tiempo estimado: {prediccion:.1f} minutos")
+        print(f"  • Velocidad promedio: {velocidad_promedio:.1f} km/h")
+        
+        if recomendaciones:
+            print("\n💡 RECOMENDACIONES:")
+            for i, rec in enumerate(recomendaciones, 1):
+                print(f"  {i}. {rec}")
+
+        # --- **NUEVO: Comparativa Porcentual** ---
+        diferencia_porcentual = ((prediccion - tiempo_promedio_general) / tiempo_promedio_general) * 100
+        print("\n" + "-"*35)
+        print("📈 COMPARATIVA CON RUTA PROMEDIO:")
+        if diferencia_porcentual > 1:
+            print(f"  • Tu ruta será un {diferencia_porcentual:.1f}% más lenta que el viaje promedio.")
+        elif diferencia_porcentual < -1:
+            print(f"  • Tu ruta será un {abs(diferencia_porcentual):.1f}% más rápida que el viaje promedio.")
+        else:
+            print(f"  • Tu ruta tendrá un tiempo similar al viaje promedio.")
+        print("-"*35)
+        
+        # --- **NUEVO: Gráfico Mejorado** ---
+        plt.figure(figsize=(10, 6))
+        bars = sns.barplot(x=['Tu Viaje Predicho', 'Ruta Promedio Común'], y=[prediccion, tiempo_promedio_general], palette=['#ff9999', '#66b3ff'], width=0.5)
+        for bar in bars.patches:
+            bars.annotate(f'{bar.get_height():.1f} min', (bar.get_x() + bar.get_width() / 2, bar.get_height()), ha='center', va='center', size=12, xytext=(0, 8), textcoords='offset points')
+        plt.title('Comparativa de Tiempos de Viaje', fontsize=16, fontweight='bold')
+        plt.ylabel('Tiempo Estimado (minutos)', fontsize=12)
+        plt.ylim(0, max(prediccion, tiempo_promedio_general) * 1.25)
+        plt.grid(axis='y', linestyle='--', alpha=0.7)
+        sns.despine()
+        plt.show()
+        
+    except ValueError:
+        print("❌ Error: Ingresaste un valor no válido. Inténtalo de nuevo.")
+    except Exception as e:
+        print(f"❌ Ocurrió un error inesperado: {e}")
+
+# --- Ejecución Principal de las Fases 1, 2 y 3 ---
+if __name__ == "__main__":
+    df_viajes = crear_dataset_demostrativo()
+    analizar_datos_con_graficos(df_viajes)
+    X_train, X_test, y_train, y_test, tiempo_promedio = preparar_datos_para_modelo(df_viajes)
+    modelo_base_entrenado = entrenar_y_comparar_modelos_base(X_train, X_test, y_train, y_test)
+    predecir_viaje_usuario(modelo_base_entrenado, tiempo_promedio)
